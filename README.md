@@ -1,6 +1,46 @@
-# DeepCap - Video Understanding API
+# DeepCap
 
-A production-ready NestJS application for deep video understanding using Google's **Gemini 3 Flash** model. This application provides REST API endpoints for analyzing videos with advanced temporal reasoning, agentic vision capabilities, multi-turn conversations, and **RAG-based semantic video search** powered by LanceDB.
+### Index once, query instantly.
+
+A video intelligence API that combines **Gemini 3 Flash's** native video understanding with **LanceDB-powered** semantic search. Analyze videos once, then query them in milliseconds.
+
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.1-blue.svg)](https://www.typescriptlang.org/)
+[![NestJS](https://img.shields.io/badge/NestJS-10.0-red.svg)](https://nestjs.com/)
+[![License](https://img.shields.io/badge/License-UNLICENSED-gray.svg)]()
+
+---
+
+## Why DeepCap?
+
+| Traditional Approach | DeepCap |
+|---------------------|---------|
+| Re-analyze video for every question | Index once, query unlimited times |
+| Expensive per-query costs | Pay only for initial indexing |
+| Slow response times | Millisecond RAG retrieval |
+| Single video at a time | Global search across all videos |
+| Basic frame sampling | Native video understanding (audio + visual + temporal) |
+
+**How it works:**
+
+```
+┌─────────────┐     ┌──────────────────┐     ┌─────────────┐
+│   Video     │────▶│   Gemini 3 Flash │────▶│   LanceDB   │
+│ (file/YouTube)    │  (native video)  │     │  (vectors)  │
+└─────────────┘     └──────────────────┘     └─────────────┘
+                                                    │
+                    ┌──────────────────┐            │
+                    │   Your Question  │◀───────────┘
+                    │  (instant answer)│   RAG retrieval
+                    └──────────────────┘
+```
+
+Gemini processes video **natively** - not as extracted frames. It understands:
+- Temporal continuity (what happens before/after)
+- Audio + visual content together
+- Text on screen (built-in OCR)
+- YouTube URLs directly (no download needed)
+
+---
 
 ## Features
 
@@ -39,8 +79,8 @@ A production-ready NestJS application for deep video understanding using Google'
 
 ```bash
 # Clone the repository
-git clone <repository-url>
-cd deepcap
+git clone https://github.com/ajagatobby/Deepcap.git
+cd Deepcap
 
 # Install dependencies
 pnpm install
@@ -612,6 +652,28 @@ src/
 data/
 └── lancedb/                          # LanceDB storage (auto-created)
 ```
+
+---
+
+## Quick Start Example
+
+```bash
+# 1. Index a YouTube video
+curl -X POST http://localhost:3000/lancedb/index/youtube/advanced \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
+
+# 2. Ask questions instantly
+curl -X POST http://localhost:3000/lancedb/chat/advanced \
+  -H "Content-Type: application/json" \
+  -d '{"videoId": "your-video-id", "query": "What is the person wearing?"}'
+```
+
+---
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ---
 
