@@ -134,7 +134,6 @@ export class ChatService {
           includeThoughts: true,
         },
         mediaResolution: sdkMediaResolution,
-        tools: [{ codeExecution: {} }],
       },
     });
 

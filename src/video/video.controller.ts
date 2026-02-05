@@ -9,7 +9,6 @@ import {
   UploadedFile,
   ParseFilePipe,
   MaxFileSizeValidator,
-  FileTypeValidator,
   HttpCode,
   HttpStatus,
   Logger,
@@ -29,6 +28,7 @@ import {
   ChatSessionResponseDto,
   ChatMessageResponseDto,
 } from '../gemini';
+import { VideoFileValidator } from '../common/validators';
 
 // Ensure uploads directory exists
 const uploadsDir = join(process.cwd(), 'uploads');
@@ -74,9 +74,7 @@ export class VideoController {
           // Max 2GB file size (Files API limit)
           new MaxFileSizeValidator({ maxSize: 2 * 1024 * 1024 * 1024 }),
           // Supported video formats
-          new FileTypeValidator({
-            fileType: /^video\/(mp4|mpeg|mov|avi|x-flv|mpg|webm|wmv|3gpp)$/,
-          }),
+          new VideoFileValidator({}),
         ],
       }),
     )
@@ -188,9 +186,7 @@ export class VideoController {
       new ParseFilePipe({
         validators: [
           new MaxFileSizeValidator({ maxSize: 2 * 1024 * 1024 * 1024 }),
-          new FileTypeValidator({
-            fileType: /^video\/(mp4|mpeg|mov|avi|x-flv|mpg|webm|wmv|3gpp)$/,
-          }),
+          new VideoFileValidator({}),
         ],
       }),
     )

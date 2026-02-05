@@ -561,9 +561,6 @@ export class VideoAnalyzeService {
               // Media resolution for video frames (280 tokens/frame at HIGH)
               mediaResolution: sdkMediaResolution,
 
-              // Enable code execution for visual analysis (Agentic Vision)
-              tools: [{ codeExecution: {} }],
-
               // Structured JSON output
               responseMimeType: 'application/json',
               responseSchema: ANALYSIS_RESPONSE_SCHEMA,
@@ -911,7 +908,6 @@ export class VideoAnalyzeService {
                 includeThoughts: true,
               },
               mediaResolution: sdkMediaResolution,
-              tools: [{ codeExecution: {} }],
               responseMimeType: 'application/json',
               responseSchema: FRAME_EXTRACTION_SCHEMA,
             },
@@ -1115,7 +1111,6 @@ Cover the ENTIRE video at 2-3 second intervals. Be extremely thorough - this wil
                 includeThoughts: true,
               },
               mediaResolution: sdkMediaResolution,
-              tools: [{ codeExecution: {} }],
               responseMimeType: 'application/json',
               responseSchema: ADVANCED_EXTRACTION_SCHEMA,
             },

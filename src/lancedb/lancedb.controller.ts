@@ -13,7 +13,6 @@ import {
   Logger,
   ParseFilePipe,
   MaxFileSizeValidator,
-  FileTypeValidator,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
@@ -32,6 +31,7 @@ import {
   GlobalSearchDto,
 } from './dto';
 import { ConfigService } from '@nestjs/config';
+import { VideoFileValidator } from '../common/validators';
 
 // Ensure uploads directory exists
 const uploadsDir = join(process.cwd(), 'uploads');
@@ -78,9 +78,7 @@ export class LanceDBController {
           // Max 2GB file size
           new MaxFileSizeValidator({ maxSize: 2 * 1024 * 1024 * 1024 }),
           // Supported video formats
-          new FileTypeValidator({
-            fileType: /^video\/(mp4|mpeg|mov|avi|x-flv|mpg|webm|wmv|3gpp)$/,
-          }),
+          new VideoFileValidator({}),
         ],
       }),
     )
@@ -290,9 +288,7 @@ export class LanceDBController {
       new ParseFilePipe({
         validators: [
           new MaxFileSizeValidator({ maxSize: 2 * 1024 * 1024 * 1024 }),
-          new FileTypeValidator({
-            fileType: /^video\/(mp4|mpeg|mov|avi|x-flv|mpg|webm|wmv|3gpp)$/,
-          }),
+          new VideoFileValidator({}),
         ],
       }),
     )
