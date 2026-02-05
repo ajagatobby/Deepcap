@@ -104,16 +104,64 @@ export interface PersonMetadata {
   apparentAge?: string;
   /** Apparent ethnicity/race description */
   apparentEthnicity?: string;
+  /** Physical build: slim/average/athletic/muscular/heavyset */
+  physicalBuild?: string;
   /** List of clothing items with colors */
   clothing?: string[];
+  /** Facial expression details */
+  facialExpression?: string;
   /** Emotional expression: happy/sad/angry/surprised/neutral/fearful/disgusted */
   emotion?: string;
+  /** Body language description */
+  bodyLanguage?: string;
   /** Current action being performed */
   action?: string;
+  /** Who/what they are interacting with */
+  interactionWith?: string;
   /** Position in frame: left/center/right, foreground/background */
   position?: string;
   /** Distinguishing features: glasses, beard, tattoos, hair style/color, etc. */
   distinguishingFeatures?: string[];
+  /** Inferred role: perpetrator/victim/witness/bystander/authority/employee/customer/unknown */
+  role?: string;
+  /** Threat level: none/low/moderate/high/critical */
+  threatLevel?: string;
+  /** Confidence in role assignment: low/medium/high */
+  roleConfidence?: string;
+}
+
+/**
+ * Person summary for aggregate tracking across video
+ */
+export interface PersonSummaryEntry {
+  /** Person ID (e.g., Person 1) */
+  personId: string;
+  /** Specific role if applicable */
+  role?: string;
+  /** Brief description */
+  description: string;
+  /** First appearance timestamp (MM:SS) */
+  firstAppearance: string;
+  /** Last appearance timestamp (MM:SS) */
+  lastAppearance: string;
+}
+
+/**
+ * Aggregate summary of all unique persons in the video
+ */
+export interface PersonsSummary {
+  /** Total count of unique individuals */
+  totalUniquePersons: number;
+  /** List of perpetrators (robbers, attackers, etc.) */
+  perpetrators: PersonSummaryEntry[];
+  /** List of victims */
+  victims: PersonSummaryEntry[];
+  /** List of authorities (police, security) */
+  authorities: PersonSummaryEntry[];
+  /** List of witnesses/bystanders */
+  witnesses: PersonSummaryEntry[];
+  /** List of people with unknown roles */
+  unknown: PersonSummaryEntry[];
 }
 
 /**
@@ -237,6 +285,8 @@ export interface AdvancedVideoAnalysisResult {
   summary: string;
   /** Detailed frame-by-frame data */
   frames: AdvancedFrameData[];
+  /** Aggregate summary of all unique persons */
+  personsSummary?: PersonsSummary;
   /** Analysis confidence */
   confidence: string;
   /** Thought summary from Gemini */

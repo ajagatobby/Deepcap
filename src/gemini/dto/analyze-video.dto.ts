@@ -18,6 +18,14 @@ export { SdkThinkingLevel as ThinkingLevel };
 export { SdkMediaResolution as MediaResolution };
 
 /**
+ * AI Provider selection
+ */
+export enum AIProviderInput {
+  GEMINI = 'gemini',
+  OPENAI = 'openai',
+}
+
+/**
  * Thinking level options for API input (string values for validation)
  */
 export enum ThinkingLevelInput {
@@ -46,6 +54,10 @@ export class AnalyzeVideoDto {
   query: string;
 
   @IsOptional()
+  @IsEnum(AIProviderInput)
+  provider?: AIProviderInput;
+
+  @IsOptional()
   @IsEnum(ThinkingLevelInput)
   thinkingLevel?: ThinkingLevelInput = ThinkingLevelInput.HIGH;
 
@@ -71,6 +83,10 @@ export class AnalyzeYouTubeDto {
   @IsNotEmpty()
   @MaxLength(2000)
   query: string;
+
+  @IsOptional()
+  @IsEnum(AIProviderInput)
+  provider?: AIProviderInput;
 
   @IsOptional()
   @IsEnum(ThinkingLevelInput)
@@ -111,6 +127,10 @@ export class StartVideoChatDto {
   @IsNotEmpty()
   @MaxLength(2000)
   initialQuery: string;
+
+  @IsOptional()
+  @IsEnum(AIProviderInput)
+  provider?: AIProviderInput;
 
   @IsOptional()
   @IsEnum(ThinkingLevelInput)

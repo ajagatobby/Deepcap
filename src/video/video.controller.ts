@@ -8,8 +8,6 @@ import {
   UseInterceptors,
   UploadedFile,
   ParseFilePipe,
-  MaxFileSizeValidator,
-  FileTypeValidator,
   HttpCode,
   HttpStatus,
   Logger,
@@ -19,8 +17,6 @@ import { diskStorage } from 'multer';
 import { extname, join } from 'path';
 import { existsSync, mkdirSync, unlinkSync } from 'fs';
 import {
-  VideoAnalyzeService,
-  ChatService,
   AnalyzeVideoDto,
   AnalyzeYouTubeDto,
   VideoChatDto,
@@ -29,6 +25,8 @@ import {
   ChatSessionResponseDto,
   ChatMessageResponseDto,
 } from '../gemini';
+import { AIProviderFactory } from '../providers';
+import { VideoFileValidator } from '../common/validators';
 
 // Ensure uploads directory exists
 const uploadsDir = join(process.cwd(), 'uploads');
@@ -38,15 +36,13 @@ if (!existsSync(uploadsDir)) {
 
 /**
  * Controller for video analysis endpoints
+ * Supports multiple AI providers (Gemini, OpenAI)
  */
 @Controller('video')
 export class VideoController {
   private readonly logger = new Logger(VideoController.name);
 
-  constructor(
-    private readonly videoAnalyzeService: VideoAnalyzeService,
-    private readonly chatService: ChatService,
-  ) {}
+  constructor(private readonly providerFactory: AIProviderFactory) {}
 
   /**
    * Upload and analyze a video file
@@ -71,12 +67,8 @@ export class VideoController {
     @UploadedFile(
       new ParseFilePipe({
         validators: [
-          // Max 2GB file size (Files API limit)
-          new MaxFileSizeValidator({ maxSize: 2 * 1024 * 1024 * 1024 }),
-          // Supported video formats
-          new FileTypeValidator({
-            fileType: /^video\/(mp4|mpeg|mov|avi|x-flv|mpg|webm|wmv|3gpp)$/,
-          }),
+          // Custom video validator with max 2GB file size
+          new VideoFileValidator({ maxSize: 2 * 1024 * 1024 * 1024 }),
         ],
       }),
     )
@@ -84,18 +76,23 @@ export class VideoController {
     @Body() dto: AnalyzeVideoDto,
   ): Promise<VideoAnalysisResponseDto> {
     const startTime = Date.now();
+    const videoAnalyzer = this.providerFactory.getVideoAnalyzer(dto.provider);
+    const providerName = videoAnalyzer.getProviderName();
+
     this.logger.log(
-      `Analyzing video: ${file.originalname} (${file.size} bytes)`,
+      `Analyzing video: ${file.originalname} (${file.size} bytes) with provider: ${providerName}`,
     );
 
     try {
-      const result = await this.videoAnalyzeService.analyzeVideoFile(
+      const result = await videoAnalyzer.analyzeVideoFile(
         file.path,
         file.mimetype,
         dto.query,
         {
-          thinkingLevel: dto.thinkingLevel,
-          mediaResolution: dto.mediaResolution,
+          qualityLevel: this.mapThinkingLevelToQuality(dto.thinkingLevel),
+          mediaResolution: this.mapMediaResolutionToQuality(
+            dto.mediaResolution,
+          ),
           systemPrompt: dto.systemPrompt,
         },
       );
@@ -109,7 +106,7 @@ export class VideoController {
         thoughtSummary: result.thoughtSummary,
         tokenUsage: result.tokenUsage,
         metadata: {
-          model: 'gemini-3-flash-preview',
+          model: providerName,
           processingTimeMs: processingTime,
         },
       };
@@ -126,6 +123,41 @@ export class VideoController {
   }
 
   /**
+   * Map thinking level input to quality level
+   */
+  private mapThinkingLevelToQuality(
+    thinkingLevel?: string,
+  ): 'low' | 'medium' | 'high' {
+    switch (thinkingLevel) {
+      case 'MINIMAL':
+      case 'LOW':
+        return 'low';
+      case 'MEDIUM':
+        return 'medium';
+      case 'HIGH':
+      default:
+        return 'high';
+    }
+  }
+
+  /**
+   * Map media resolution input to quality level
+   */
+  private mapMediaResolutionToQuality(
+    mediaResolution?: string,
+  ): 'low' | 'medium' | 'high' {
+    switch (mediaResolution) {
+      case 'MEDIA_RESOLUTION_LOW':
+        return 'low';
+      case 'MEDIA_RESOLUTION_MEDIUM':
+        return 'medium';
+      case 'MEDIA_RESOLUTION_HIGH':
+      default:
+        return 'high';
+    }
+  }
+
+  /**
    * Analyze a YouTube video URL
    * POST /video/analyze-url
    */
@@ -135,18 +167,19 @@ export class VideoController {
     @Body() dto: AnalyzeYouTubeDto,
   ): Promise<VideoAnalysisResponseDto> {
     const startTime = Date.now();
-    this.logger.log(`Analyzing YouTube URL: ${dto.url}`);
+    const videoAnalyzer = this.providerFactory.getVideoAnalyzer(dto.provider);
+    const providerName = videoAnalyzer.getProviderName();
 
-    const result = await this.videoAnalyzeService.analyzeYouTubeUrl(
-      dto.url,
-      dto.query,
-      {
-        thinkingLevel: dto.thinkingLevel,
-        mediaResolution: dto.mediaResolution,
-        startOffset: dto.startOffset,
-        endOffset: dto.endOffset,
-      },
+    this.logger.log(
+      `Analyzing YouTube URL: ${dto.url} with provider: ${providerName}`,
     );
+
+    const result = await videoAnalyzer.analyzeYouTubeUrl(dto.url, dto.query, {
+      qualityLevel: this.mapThinkingLevelToQuality(dto.thinkingLevel),
+      mediaResolution: this.mapMediaResolutionToQuality(dto.mediaResolution),
+      startOffset: dto.startOffset,
+      endOffset: dto.endOffset,
+    });
 
     const processingTime = Date.now() - startTime;
 
@@ -157,7 +190,7 @@ export class VideoController {
       thoughtSummary: result.thoughtSummary,
       tokenUsage: result.tokenUsage,
       metadata: {
-        model: 'gemini-3-flash-preview',
+        model: providerName,
         processingTimeMs: processingTime,
         fileUri: dto.url,
       },
@@ -187,29 +220,33 @@ export class VideoController {
     @UploadedFile(
       new ParseFilePipe({
         validators: [
-          new MaxFileSizeValidator({ maxSize: 2 * 1024 * 1024 * 1024 }),
-          new FileTypeValidator({
-            fileType: /^video\/(mp4|mpeg|mov|avi|x-flv|mpg|webm|wmv|3gpp)$/,
-          }),
+          // Custom video validator with max 2GB file size
+          new VideoFileValidator({ maxSize: 2 * 1024 * 1024 * 1024 }),
         ],
       }),
     )
     file: Express.Multer.File,
     @Body() dto: StartVideoChatDto,
   ): Promise<ChatSessionResponseDto> {
-    this.logger.log(`Starting chat session with video: ${file.originalname}`);
+    const chatProvider = this.providerFactory.getChatProvider(dto.provider);
+    const providerName = chatProvider.getProviderName();
+
+    this.logger.log(
+      `Starting chat session with video: ${file.originalname} using provider: ${providerName}`,
+    );
 
     try {
-      const { sessionId, response } =
-        await this.chatService.startSessionWithFile(
-          file.path,
-          file.mimetype,
-          dto.initialQuery,
-          {
-            thinkingLevel: dto.thinkingLevel,
-            mediaResolution: dto.mediaResolution,
-          },
-        );
+      const { sessionId, response } = await chatProvider.startSessionWithFile(
+        file.path,
+        file.mimetype,
+        dto.initialQuery,
+        {
+          qualityLevel: this.mapThinkingLevelToQuality(dto.thinkingLevel),
+          mediaResolution: this.mapMediaResolutionToQuality(
+            dto.mediaResolution,
+          ),
+        },
+      );
 
       return {
         sessionId,
@@ -223,7 +260,7 @@ export class VideoController {
         createdAt: new Date(),
       };
     } finally {
-      // Clean up the local file (it's already uploaded to Google)
+      // Clean up the local file (it's already uploaded to provider)
       try {
         if (existsSync(file.path)) {
           unlinkSync(file.path);
@@ -243,13 +280,21 @@ export class VideoController {
   async startChatWithYouTube(
     @Body() dto: AnalyzeYouTubeDto,
   ): Promise<ChatSessionResponseDto> {
-    this.logger.log(`Starting chat session with YouTube URL: ${dto.url}`);
+    const chatProvider = this.providerFactory.getChatProvider(dto.provider);
+    const providerName = chatProvider.getProviderName();
 
-    const { sessionId, response } =
-      await this.chatService.startSessionWithYouTube(dto.url, dto.query, {
-        thinkingLevel: dto.thinkingLevel,
-        mediaResolution: dto.mediaResolution,
-      });
+    this.logger.log(
+      `Starting chat session with YouTube URL: ${dto.url} using provider: ${providerName}`,
+    );
+
+    const { sessionId, response } = await chatProvider.startSessionWithYouTube(
+      dto.url,
+      dto.query,
+      {
+        qualityLevel: this.mapThinkingLevelToQuality(dto.thinkingLevel),
+        mediaResolution: this.mapMediaResolutionToQuality(dto.mediaResolution),
+      },
+    );
 
     return {
       sessionId,
@@ -267,6 +312,7 @@ export class VideoController {
   /**
    * Send a message in an existing chat session
    * POST /video/chat/message
+   * Note: Uses the same provider that was used to start the session
    */
   @Post('chat/message')
   @HttpCode(HttpStatus.OK)
@@ -275,10 +321,26 @@ export class VideoController {
   ): Promise<ChatMessageResponseDto> {
     this.logger.log(`Chat message in session ${dto.sessionId}`);
 
-    const response = await this.chatService.sendMessage(
-      dto.sessionId,
-      dto.message,
-    );
+    // Try both providers to find the session
+    const geminiChat = this.providerFactory.getChatProvider('gemini');
+    const openaiChat = this.providerFactory.getChatProvider('openai');
+
+    let response;
+    let providerUsed = 'unknown';
+
+    // Check Gemini first
+    if (geminiChat.getSession(dto.sessionId)) {
+      response = await geminiChat.sendMessage(dto.sessionId, dto.message);
+      providerUsed = 'gemini';
+    } else if (openaiChat.getSession(dto.sessionId)) {
+      response = await openaiChat.sendMessage(dto.sessionId, dto.message);
+      providerUsed = 'openai';
+    } else {
+      // Try default provider
+      const defaultChat = this.providerFactory.getChatProvider();
+      response = await defaultChat.sendMessage(dto.sessionId, dto.message);
+      providerUsed = defaultChat.getProviderName();
+    }
 
     return {
       sessionId: dto.sessionId,
@@ -295,7 +357,19 @@ export class VideoController {
    */
   @Get('chat/:sessionId/history')
   async getChatHistory(@Param('sessionId') sessionId: string) {
-    return this.chatService.getConversationHistory(sessionId);
+    // Try both providers to find the session
+    const geminiChat = this.providerFactory.getChatProvider('gemini');
+    const openaiChat = this.providerFactory.getChatProvider('openai');
+
+    if (geminiChat.getSession(sessionId)) {
+      return geminiChat.getConversationHistory(sessionId);
+    } else if (openaiChat.getSession(sessionId)) {
+      return openaiChat.getConversationHistory(sessionId);
+    }
+
+    // Try default provider
+    const defaultChat = this.providerFactory.getChatProvider();
+    return defaultChat.getConversationHistory(sessionId);
   }
 
   /**
@@ -304,12 +378,25 @@ export class VideoController {
    */
   @Get('chat/:sessionId')
   async getChatSession(@Param('sessionId') sessionId: string) {
-    const session = this.chatService.getSession(sessionId);
+    // Try both providers to find the session
+    const geminiChat = this.providerFactory.getChatProvider('gemini');
+    const openaiChat = this.providerFactory.getChatProvider('openai');
+
+    let session = geminiChat.getSession(sessionId);
+    let provider = 'gemini';
+
+    if (!session) {
+      session = openaiChat.getSession(sessionId);
+      provider = 'openai';
+    }
+
     if (!session) {
       return { error: 'Session not found' };
     }
+
     return {
       id: session.id,
+      provider,
       createdAt: session.createdAt,
       lastActivityAt: session.lastActivityAt,
       messageCount: session.messages.length,
@@ -323,7 +410,19 @@ export class VideoController {
   @Delete('chat/:sessionId')
   @HttpCode(HttpStatus.NO_CONTENT)
   async endChatSession(@Param('sessionId') sessionId: string): Promise<void> {
-    await this.chatService.endSession(sessionId);
+    // Try both providers to end the session
+    const geminiChat = this.providerFactory.getChatProvider('gemini');
+    const openaiChat = this.providerFactory.getChatProvider('openai');
+
+    if (geminiChat.getSession(sessionId)) {
+      await geminiChat.endSession(sessionId);
+    } else if (openaiChat.getSession(sessionId)) {
+      await openaiChat.endSession(sessionId);
+    } else {
+      // Try default provider
+      const defaultChat = this.providerFactory.getChatProvider();
+      await defaultChat.endSession(sessionId);
+    }
   }
 
   /**
@@ -332,12 +431,35 @@ export class VideoController {
    */
   @Get('chat')
   async listChatSessions() {
-    const sessions = this.chatService.listSessions();
-    return sessions.map((s) => ({
+    // Get sessions from both providers
+    const geminiChat = this.providerFactory.getChatProvider('gemini');
+    const openaiChat = this.providerFactory.getChatProvider('openai');
+
+    const geminiSessions = geminiChat.listSessions().map((s) => ({
       id: s.id,
+      provider: 'gemini',
       createdAt: s.createdAt,
       lastActivityAt: s.lastActivityAt,
       messageCount: s.messages.length,
     }));
+
+    const openaiSessions = openaiChat.listSessions().map((s) => ({
+      id: s.id,
+      provider: 'openai',
+      createdAt: s.createdAt,
+      lastActivityAt: s.lastActivityAt,
+      messageCount: s.messages.length,
+    }));
+
+    return [...geminiSessions, ...openaiSessions];
+  }
+
+  /**
+   * Get available AI providers
+   * GET /video/providers
+   */
+  @Get('providers')
+  async getProviders() {
+    return this.providerFactory.getAvailableProviders();
   }
 }

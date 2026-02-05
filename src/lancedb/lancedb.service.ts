@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as lancedb from '@lancedb/lancedb';
 import {
@@ -63,7 +68,10 @@ export class LanceDBService implements OnModuleInit, OnModuleDestroy {
       this.isReady = true;
       this.logger.log('LanceDB connected and tables initialized');
     } catch (error) {
-      this.logger.error(`Failed to connect to LanceDB: ${error.message}`, error.stack);
+      this.logger.error(
+        `Failed to connect to LanceDB: ${error.message}`,
+        error.stack,
+      );
       throw error;
     }
   }
@@ -93,9 +101,13 @@ export class LanceDBService implements OnModuleInit, OnModuleDestroy {
 
     // Initialize enhanced frames table (multi-aspect)
     if (tableNames.includes(this.ENHANCED_FRAMES_TABLE)) {
-      this.enhancedFramesTable = await this.db.openTable(this.ENHANCED_FRAMES_TABLE);
+      this.enhancedFramesTable = await this.db.openTable(
+        this.ENHANCED_FRAMES_TABLE,
+      );
       const count = await this.enhancedFramesTable.countRows();
-      this.logger.log(`Opened existing enhanced frames table with ${count} rows`);
+      this.logger.log(
+        `Opened existing enhanced frames table with ${count} rows`,
+      );
     } else {
       this.logger.log('Enhanced frames table will be created on first insert');
     }
@@ -117,7 +129,9 @@ export class LanceDBService implements OnModuleInit, OnModuleDestroy {
     try {
       if (!this.videosTable) {
         // Create table with first record
-        this.videosTable = await this.db.createTable(this.VIDEOS_TABLE, [video]);
+        this.videosTable = await this.db.createTable(this.VIDEOS_TABLE, [
+          video,
+        ]);
         this.logger.log('Created videos table');
       } else {
         await this.videosTable.add([video]);
@@ -197,7 +211,9 @@ export class LanceDBService implements OnModuleInit, OnModuleDestroy {
     const { videoId, aspectTypes, limit = 10 } = options;
 
     if (!this.enhancedFramesTable) {
-      this.logger.warn('Enhanced frames table not initialized, returning empty results');
+      this.logger.warn(
+        'Enhanced frames table not initialized, returning empty results',
+      );
       return [];
     }
 
@@ -273,7 +289,9 @@ export class LanceDBService implements OnModuleInit, OnModuleDestroy {
       const results = await query.toArray();
 
       const latency = Date.now() - startTime;
-      this.logger.debug(`Vector search completed in ${latency}ms, found ${results.length} results`);
+      this.logger.debug(
+        `Vector search completed in ${latency}ms, found ${results.length} results`,
+      );
 
       return results as FrameSearchResult[];
     } catch (error) {
@@ -370,7 +388,9 @@ export class LanceDBService implements OnModuleInit, OnModuleDestroy {
 
       return results.length > 0;
     } catch (error) {
-      this.logger.error(`Failed to check video indexed status: ${error.message}`);
+      this.logger.error(
+        `Failed to check video indexed status: ${error.message}`,
+      );
       return false;
     }
   }
@@ -458,7 +478,9 @@ export class LanceDBService implements OnModuleInit, OnModuleDestroy {
         (a, b) => a.timestampSeconds - b.timestampSeconds,
       );
     } catch (error) {
-      this.logger.error(`Failed to get enhanced video frames: ${error.message}`);
+      this.logger.error(
+        `Failed to get enhanced video frames: ${error.message}`,
+      );
       throw error;
     }
   }
@@ -491,7 +513,9 @@ export class LanceDBService implements OnModuleInit, OnModuleDestroy {
           });
           this.logger.log('Legacy frames index created successfully');
         } catch (error) {
-          this.logger.error(`Failed to create legacy frames index: ${error.message}`);
+          this.logger.error(
+            `Failed to create legacy frames index: ${error.message}`,
+          );
         }
       }
     }
@@ -510,7 +534,9 @@ export class LanceDBService implements OnModuleInit, OnModuleDestroy {
           });
           this.logger.log('Enhanced frames index created successfully');
         } catch (error) {
-          this.logger.error(`Failed to create enhanced frames index: ${error.message}`);
+          this.logger.error(
+            `Failed to create enhanced frames index: ${error.message}`,
+          );
         }
       }
     }

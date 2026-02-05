@@ -12,6 +12,11 @@ import {
 } from './interfaces';
 import { ThinkingLevelInput, MediaResolutionInput } from './dto';
 import { v4 as uuidv4 } from 'uuid';
+import {
+  IChatProvider,
+  ChatOptions,
+  ChatSessionResult,
+} from '../providers/interfaces';
 
 /**
  * Default system instruction for video chat
@@ -28,9 +33,10 @@ const CHAT_SYSTEM_INSTRUCTION = `You are a video analyst assistant engaged in a 
 /**
  * Service for managing multi-turn conversations about videos
  * Handles thought signature management for maintaining reasoning context
+ * Implements IChatProvider interface for provider abstraction
  */
 @Injectable()
-export class ChatService {
+export class ChatService implements IChatProvider {
   private readonly logger = new Logger(ChatService.name);
   
   // In-memory session storage (use Redis/database in production)
@@ -43,6 +49,47 @@ export class ChatService {
     private readonly geminiService: GeminiService,
     private readonly fileManagerService: FileManagerService,
   ) {}
+
+  /**
+   * Get the provider name
+   */
+  getProviderName(): string {
+    return 'gemini';
+  }
+
+  /**
+   * Map provider quality level to Gemini thinking level
+   */
+  private mapQualityToThinkingLevel(
+    quality?: 'low' | 'medium' | 'high',
+  ): ThinkingLevelInput {
+    switch (quality) {
+      case 'low':
+        return ThinkingLevelInput.LOW;
+      case 'medium':
+        return ThinkingLevelInput.MEDIUM;
+      case 'high':
+      default:
+        return ThinkingLevelInput.HIGH;
+    }
+  }
+
+  /**
+   * Map provider resolution to Gemini media resolution
+   */
+  private mapResolutionToMediaResolution(
+    quality?: 'low' | 'medium' | 'high',
+  ): MediaResolutionInput {
+    switch (quality) {
+      case 'low':
+        return MediaResolutionInput.LOW;
+      case 'medium':
+        return MediaResolutionInput.MEDIUM;
+      case 'high':
+      default:
+        return MediaResolutionInput.HIGH;
+    }
+  }
 
   /**
    * Convert input thinking level to SDK type
@@ -81,21 +128,19 @@ export class ChatService {
    * @param filePath Path to the video file
    * @param mimeType MIME type of the video
    * @param initialQuery The first question about the video
-   * @param options Configuration options
+   * @param options Configuration options (using generic interface types)
    */
   async startSessionWithFile(
     filePath: string,
     mimeType: string,
     initialQuery: string,
-    options: {
-      thinkingLevel?: ThinkingLevelInput;
-      mediaResolution?: MediaResolutionInput;
-    } = {},
-  ): Promise<{ sessionId: string; response: VideoAnalysisResult }> {
-    const {
-      thinkingLevel = ThinkingLevelInput.HIGH,
-      mediaResolution = MediaResolutionInput.HIGH,
-    } = options;
+    options: ChatOptions = {},
+  ): Promise<ChatSessionResult> {
+    // Map generic options to Gemini-specific options
+    const thinkingLevel = this.mapQualityToThinkingLevel(options.qualityLevel);
+    const mediaResolution = this.mapResolutionToMediaResolution(
+      options.mediaResolution,
+    );
 
     const sdkThinkingLevel = this.toSdkThinkingLevel(thinkingLevel);
     const sdkMediaResolution = this.toSdkMediaResolution(mediaResolution);
@@ -195,15 +240,13 @@ export class ChatService {
   async startSessionWithYouTube(
     youtubeUrl: string,
     initialQuery: string,
-    options: {
-      thinkingLevel?: ThinkingLevelInput;
-      mediaResolution?: MediaResolutionInput;
-    } = {},
-  ): Promise<{ sessionId: string; response: VideoAnalysisResult }> {
-    const {
-      thinkingLevel = ThinkingLevelInput.HIGH,
-      mediaResolution = MediaResolutionInput.HIGH,
-    } = options;
+    options: ChatOptions = {},
+  ): Promise<ChatSessionResult> {
+    // Map generic options to Gemini-specific options
+    const thinkingLevel = this.mapQualityToThinkingLevel(options.qualityLevel);
+    const mediaResolution = this.mapResolutionToMediaResolution(
+      options.mediaResolution,
+    );
 
     const sdkThinkingLevel = this.toSdkThinkingLevel(thinkingLevel);
     const sdkMediaResolution = this.toSdkMediaResolution(mediaResolution);

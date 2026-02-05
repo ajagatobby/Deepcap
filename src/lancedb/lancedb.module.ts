@@ -6,7 +6,7 @@ import { LanceDBService } from './lancedb.service';
 import { VideoIndexService } from './video-index.service';
 import { RAGChatService } from './rag-chat.service';
 import { LanceDBController } from './lancedb.controller';
-import { GeminiModule } from '../gemini/gemini.module';
+import { ProvidersModule } from '../providers/providers.module';
 
 /**
  * LanceDB module for vector-based video search and RAG
@@ -25,7 +25,7 @@ import { GeminiModule } from '../gemini/gemini.module';
         fileSize: 2 * 1024 * 1024 * 1024, // 2GB limit
       },
     }),
-    GeminiModule,
+    ProvidersModule,
   ],
   controllers: [LanceDBController],
   providers: [

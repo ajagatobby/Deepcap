@@ -8,7 +8,12 @@ import {
   Min,
   IsEnum,
 } from 'class-validator';
-import { ThinkingLevelInput, MediaResolutionInput } from '../../gemini/dto';
+import { Transform, Type } from 'class-transformer';
+import {
+  ThinkingLevelInput,
+  MediaResolutionInput,
+  AIProviderInput,
+} from '../../gemini/dto';
 
 /**
  * Frame description for indexing
@@ -34,6 +39,10 @@ export class IndexVideoDto {
   title?: string;
 
   @IsOptional()
+  @IsEnum(AIProviderInput)
+  provider?: AIProviderInput;
+
+  @IsOptional()
   @IsEnum(ThinkingLevelInput)
   thinkingLevel?: ThinkingLevelInput = ThinkingLevelInput.HIGH;
 
@@ -54,6 +63,10 @@ export class IndexYouTubeDto {
   @IsString()
   @MaxLength(500)
   title?: string;
+
+  @IsOptional()
+  @IsEnum(AIProviderInput)
+  provider?: AIProviderInput;
 
   @IsOptional()
   @IsEnum(ThinkingLevelInput)
@@ -86,6 +99,11 @@ export class RAGChatDto {
   query: string;
 
   @IsOptional()
+  @IsEnum(AIProviderInput)
+  provider?: AIProviderInput;
+
+  @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   @Min(1)
   topK?: number;
@@ -101,6 +119,11 @@ export class GlobalSearchDto {
   query: string;
 
   @IsOptional()
+  @IsEnum(AIProviderInput)
+  provider?: AIProviderInput;
+
+  @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   @Min(1)
   topK?: number;

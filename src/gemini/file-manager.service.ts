@@ -7,6 +7,12 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { GeminiService } from './gemini.service';
 import { FileMetadata, FileState } from './interfaces';
+import {
+  IFileHandler,
+  UploadedFileMetadata,
+  FileState as ProviderFileState,
+  FileUploadOptions,
+} from '../providers/interfaces';
 
 /**
  * Custom error for file processing failures
@@ -45,9 +51,10 @@ export class FileProcessingTimeoutError extends HttpException {
 
 /**
  * Service for managing video file uploads using the Google AI Files API
+ * Implements IFileHandler interface for provider abstraction
  */
 @Injectable()
-export class FileManagerService {
+export class FileManagerService implements IFileHandler {
   private readonly logger = new Logger(FileManagerService.name);
   private readonly maxPollAttempts: number;
   private readonly pollIntervalMs: number;
@@ -61,15 +68,55 @@ export class FileManagerService {
   }
 
   /**
+   * Get the provider name
+   */
+  getProviderName(): string {
+    return 'gemini';
+  }
+
+  /**
+   * Check if this handler supports direct YouTube URL processing
+   * Gemini supports this natively
+   */
+  supportsYouTubeUrls(): boolean {
+    return true;
+  }
+
+  /**
+   * Get the status of an uploaded file (IFileHandler interface)
+   */
+  async getFileStatus(fileName: string): Promise<UploadedFileMetadata> {
+    const metadata = await this.getFileInfo(fileName);
+    return this.toUploadedFileMetadata(metadata);
+  }
+
+  /**
+   * Convert internal FileMetadata to UploadedFileMetadata interface
+   */
+  private toUploadedFileMetadata(metadata: FileMetadata): UploadedFileMetadata {
+    return {
+      name: metadata.name,
+      displayName: metadata.displayName,
+      mimeType: metadata.mimeType,
+      sizeBytes: metadata.sizeBytes,
+      uri: metadata.uri,
+      state: metadata.state as ProviderFileState,
+      error: metadata.error,
+    };
+  }
+
+  /**
    * Upload a video file to Google's temporary storage
    * @param filePath Path to the video file
    * @param mimeType MIME type of the video (e.g., 'video/mp4')
    * @param displayName Optional display name for the file
+   * @param _options Upload options (ignored for Gemini as it processes full video natively)
    */
   async uploadVideo(
     filePath: string,
     mimeType: string,
     displayName?: string,
+    _options?: FileUploadOptions,
   ): Promise<FileMetadata> {
     this.logger.log(`Uploading video: ${filePath} (${mimeType})`);
 
@@ -182,13 +229,18 @@ export class FileManagerService {
   /**
    * Upload a video and wait for it to be ready
    * Combines upload and polling in one operation
+   * @param filePath Path to the video file
+   * @param mimeType MIME type of the video
+   * @param displayName Optional display name for the file
+   * @param options Upload options (ignored for Gemini as it processes full video natively)
    */
   async uploadAndWaitForActive(
     filePath: string,
     mimeType: string,
     displayName?: string,
+    options?: FileUploadOptions,
   ): Promise<FileMetadata> {
-    const uploaded = await this.uploadVideo(filePath, mimeType, displayName);
+    const uploaded = await this.uploadVideo(filePath, mimeType, displayName, options);
     
     // If already active, return immediately
     if (uploaded.state === 'ACTIVE') {

@@ -449,11 +449,24 @@ export class VideoIndexService {
     const descriptions = people.map((person, index) => {
       const parts: string[] = [];
 
+      // ROLE is the most important for searchability (e.g., "robber", "victim")
+      if (person.role && person.role !== 'unknown') {
+        parts.push(`[${person.role.toUpperCase()}]`);
+      }
+
+      // Threat level for dangerous individuals
+      if (person.threatLevel && person.threatLevel !== 'none') {
+        parts.push(`(threat: ${person.threatLevel})`);
+      }
+
       // Basic demographics
       if (person.gender) parts.push(person.gender);
       if (person.apparentAge) parts.push(person.apparentAge);
       if (person.apparentEthnicity)
         parts.push(`appears ${person.apparentEthnicity}`);
+
+      // Physical build
+      if (person.physicalBuild) parts.push(person.physicalBuild);
 
       // Physical description
       if (
@@ -468,9 +481,16 @@ export class VideoIndexService {
         parts.push(`wearing ${person.clothing.join(', ')}`);
       }
 
-      // Emotion and action
-      if (person.emotion) parts.push(`looking ${person.emotion}`);
-      if (person.action) parts.push(person.action);
+      // Facial expression and emotion
+      if (person.facialExpression) parts.push(`expression: ${person.facialExpression}`);
+      if (person.emotion) parts.push(`emotion: ${person.emotion}`);
+
+      // Body language
+      if (person.bodyLanguage) parts.push(`body language: ${person.bodyLanguage}`);
+
+      // Action and interaction
+      if (person.action) parts.push(`action: ${person.action}`);
+      if (person.interactionWith) parts.push(`interacting with: ${person.interactionWith}`);
       if (person.position) parts.push(`positioned ${person.position}`);
 
       const personId = person.id || `Person ${index + 1}`;

@@ -13,6 +13,12 @@ import {
   AdvancedVideoAnalysisResult,
   AdvancedFrameData,
 } from '../lancedb/interfaces';
+import {
+  IVideoAnalyzer,
+  AnalysisOptions,
+  IndexingOptions,
+  YouTubeAnalysisOptions,
+} from '../providers/interfaces';
 
 /**
  * JSON schema for structured video analysis output
@@ -406,15 +412,57 @@ const DEFAULT_SYSTEM_INSTRUCTION = `You are a video analyst. Follow these rules 
 
 /**
  * Service for analyzing videos using Gemini 3 Flash
+ * Implements IVideoAnalyzer interface for provider abstraction
  */
 @Injectable()
-export class VideoAnalyzeService {
+export class VideoAnalyzeService implements IVideoAnalyzer {
   private readonly logger = new Logger(VideoAnalyzeService.name);
 
   constructor(
     private readonly geminiService: GeminiService,
     private readonly fileManagerService: FileManagerService,
   ) {}
+
+  /**
+   * Get the provider name
+   */
+  getProviderName(): string {
+    return 'gemini';
+  }
+
+  /**
+   * Map provider quality level to Gemini thinking level
+   */
+  private mapQualityToThinkingLevel(
+    quality?: 'low' | 'medium' | 'high',
+  ): ThinkingLevelInput {
+    switch (quality) {
+      case 'low':
+        return ThinkingLevelInput.LOW;
+      case 'medium':
+        return ThinkingLevelInput.MEDIUM;
+      case 'high':
+      default:
+        return ThinkingLevelInput.HIGH;
+    }
+  }
+
+  /**
+   * Map provider resolution to Gemini media resolution
+   */
+  private mapResolutionToMediaResolution(
+    resolution?: 'low' | 'medium' | 'high',
+  ): MediaResolutionInput {
+    switch (resolution) {
+      case 'low':
+        return MediaResolutionInput.LOW;
+      case 'medium':
+        return MediaResolutionInput.MEDIUM;
+      case 'high':
+      default:
+        return MediaResolutionInput.HIGH;
+    }
+  }
 
   /**
    * Convert input thinking level to SDK type
@@ -453,17 +501,13 @@ export class VideoAnalyzeService {
    * @param filePath Path to the video file
    * @param mimeType MIME type of the video
    * @param query The analysis query/question
-   * @param options Configuration options
+   * @param options Configuration options (using generic interface types)
    */
   async analyzeVideoFile(
     filePath: string,
     mimeType: string,
     query: string,
-    options: {
-      thinkingLevel?: ThinkingLevelInput;
-      mediaResolution?: MediaResolutionInput;
-      systemPrompt?: string;
-    } = {},
+    options: AnalysisOptions = {},
   ): Promise<VideoAnalysisResult> {
     const startTime = Date.now();
 
@@ -504,17 +548,14 @@ export class VideoAnalyzeService {
     fileUri: string,
     mimeType: string,
     query: string,
-    options: {
-      thinkingLevel?: ThinkingLevelInput;
-      mediaResolution?: MediaResolutionInput;
-      systemPrompt?: string;
-    } = {},
+    options: AnalysisOptions = {},
   ): Promise<VideoAnalysisResult> {
-    const {
-      thinkingLevel = ThinkingLevelInput.HIGH,
-      mediaResolution = MediaResolutionInput.HIGH,
-      systemPrompt = DEFAULT_SYSTEM_INSTRUCTION,
-    } = options;
+    // Map generic options to Gemini-specific options
+    const thinkingLevel = this.mapQualityToThinkingLevel(options.qualityLevel);
+    const mediaResolution = this.mapResolutionToMediaResolution(
+      options.mediaResolution,
+    );
+    const systemPrompt = options.systemPrompt || DEFAULT_SYSTEM_INSTRUCTION;
 
     const sdkThinkingLevel = this.toSdkThinkingLevel(thinkingLevel);
     const sdkMediaResolution = this.toSdkMediaResolution(mediaResolution);
@@ -718,21 +759,15 @@ export class VideoAnalyzeService {
   async analyzeYouTubeUrl(
     youtubeUrl: string,
     query: string,
-    options: {
-      thinkingLevel?: ThinkingLevelInput;
-      mediaResolution?: MediaResolutionInput;
-      systemPrompt?: string;
-      startOffset?: string;
-      endOffset?: string;
-    } = {},
+    options: YouTubeAnalysisOptions = {},
   ): Promise<VideoAnalysisResult> {
-    const {
-      thinkingLevel = ThinkingLevelInput.HIGH,
-      mediaResolution = MediaResolutionInput.HIGH,
-      systemPrompt = DEFAULT_SYSTEM_INSTRUCTION,
-      startOffset,
-      endOffset,
-    } = options;
+    // Map generic options to Gemini-specific options
+    const thinkingLevel = this.mapQualityToThinkingLevel(options.qualityLevel);
+    const mediaResolution = this.mapResolutionToMediaResolution(
+      options.mediaResolution,
+    );
+    const systemPrompt = options.systemPrompt || DEFAULT_SYSTEM_INSTRUCTION;
+    const { startOffset, endOffset } = options;
 
     const sdkThinkingLevel = this.toSdkThinkingLevel(thinkingLevel);
     const sdkMediaResolution = this.toSdkMediaResolution(mediaResolution);
@@ -865,15 +900,13 @@ export class VideoAnalyzeService {
   async analyzeForIndexing(
     fileUri: string,
     mimeType: string,
-    options: {
-      thinkingLevel?: ThinkingLevelInput;
-      mediaResolution?: MediaResolutionInput;
-    } = {},
+    options: IndexingOptions = {},
   ): Promise<VideoAnalysisResult> {
-    const {
-      thinkingLevel = ThinkingLevelInput.HIGH,
-      mediaResolution = MediaResolutionInput.HIGH,
-    } = options;
+    // Map generic options to Gemini-specific options
+    const thinkingLevel = this.mapQualityToThinkingLevel(options.qualityLevel);
+    const mediaResolution = this.mapResolutionToMediaResolution(
+      options.mediaResolution,
+    );
 
     const sdkThinkingLevel = this.toSdkThinkingLevel(thinkingLevel);
     const sdkMediaResolution = this.toSdkMediaResolution(mediaResolution);
@@ -944,19 +977,14 @@ export class VideoAnalyzeService {
    */
   async analyzeYouTubeForIndexing(
     youtubeUrl: string,
-    options: {
-      thinkingLevel?: ThinkingLevelInput;
-      mediaResolution?: MediaResolutionInput;
-      startOffset?: string;
-      endOffset?: string;
-    } = {},
+    options: YouTubeAnalysisOptions & IndexingOptions = {},
   ): Promise<VideoAnalysisResult> {
-    const {
-      thinkingLevel = ThinkingLevelInput.HIGH,
-      mediaResolution = MediaResolutionInput.HIGH,
-      startOffset,
-      endOffset,
-    } = options;
+    // Map generic options to Gemini-specific options
+    const thinkingLevel = this.mapQualityToThinkingLevel(options.qualityLevel);
+    const mediaResolution = this.mapResolutionToMediaResolution(
+      options.mediaResolution,
+    );
+    const { startOffset, endOffset } = options;
 
     const sdkThinkingLevel = this.toSdkThinkingLevel(thinkingLevel);
     const sdkMediaResolution = this.toSdkMediaResolution(mediaResolution);
@@ -1061,15 +1089,13 @@ export class VideoAnalyzeService {
   async analyzeForAdvancedIndexing(
     fileUri: string,
     mimeType: string,
-    options: {
-      thinkingLevel?: ThinkingLevelInput;
-      mediaResolution?: MediaResolutionInput;
-    } = {},
+    options: IndexingOptions = {},
   ): Promise<AdvancedVideoAnalysisResult> {
-    const {
-      thinkingLevel = ThinkingLevelInput.HIGH,
-      mediaResolution = MediaResolutionInput.HIGH,
-    } = options;
+    // Map generic options to Gemini-specific options
+    const thinkingLevel = this.mapQualityToThinkingLevel(options.qualityLevel);
+    const mediaResolution = this.mapResolutionToMediaResolution(
+      options.mediaResolution,
+    );
 
     const sdkThinkingLevel = this.toSdkThinkingLevel(thinkingLevel);
     const sdkMediaResolution = this.toSdkMediaResolution(mediaResolution);
@@ -1148,19 +1174,14 @@ Cover the ENTIRE video at 2-3 second intervals. Be extremely thorough - this wil
    */
   async analyzeYouTubeForAdvancedIndexing(
     youtubeUrl: string,
-    options: {
-      thinkingLevel?: ThinkingLevelInput;
-      mediaResolution?: MediaResolutionInput;
-      startOffset?: string;
-      endOffset?: string;
-    } = {},
+    options: YouTubeAnalysisOptions & IndexingOptions = {},
   ): Promise<AdvancedVideoAnalysisResult> {
-    const {
-      thinkingLevel = ThinkingLevelInput.HIGH,
-      mediaResolution = MediaResolutionInput.HIGH,
-      startOffset,
-      endOffset,
-    } = options;
+    // Map generic options to Gemini-specific options
+    const thinkingLevel = this.mapQualityToThinkingLevel(options.qualityLevel);
+    const mediaResolution = this.mapResolutionToMediaResolution(
+      options.mediaResolution,
+    );
+    const { startOffset, endOffset } = options;
 
     const sdkThinkingLevel = this.toSdkThinkingLevel(thinkingLevel);
     const sdkMediaResolution = this.toSdkMediaResolution(mediaResolution);

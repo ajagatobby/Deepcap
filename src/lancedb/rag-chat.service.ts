@@ -1,9 +1,8 @@
 import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ThinkingLevel } from '@google/genai';
 import { EmbeddingService } from './embedding.service';
 import { LanceDBService } from './lancedb.service';
-import { GeminiService } from '../gemini/gemini.service';
+import { AIProviderFactory, ITextGenerator, AIProvider } from '../providers';
 import {
   RAGResponse,
   FrameSearchResult,
@@ -28,22 +27,39 @@ Rules:
 /**
  * Enhanced system instruction for advanced multi-aspect RAG
  */
-const ADVANCED_RAG_SYSTEM_INSTRUCTION = `You are an expert video content assistant with access to comprehensive multi-modal video data including:
-- Detailed information about people (gender, age, ethnicity, clothing, emotions, actions)
-- Objects and their properties
-- Scene details (location, lighting, atmosphere)
+const ADVANCED_RAG_SYSTEM_INSTRUCTION = `You are an expert forensic video analyst assistant with access to comprehensive multi-modal video data including:
+- PEOPLE with ROLES: perpetrators/robbers/attackers, victims, authorities (police/security), witnesses/bystanders
+- Detailed demographics: gender, age, ethnicity, physical build, clothing, emotions, actions
+- THREAT LEVELS: none, low, moderate, high, critical
+- Objects and their properties (including weapons)
+- Scene details (location, lighting, atmosphere, danger level)
 - Audio transcriptions (all speech word-for-word)
 - Text visible on screen
-- Actions and events
+- Actions and events with timestamps
 
-Rules:
+## CRITICAL: ROLE-BASED QUERIES
+When users ask about specific roles (robbers, victims, criminals, perpetrators, attackers, police, security):
+1. Look for entries marked with [PERPETRATOR], [VICTIM], [AUTHORITY], [WITNESS], or [BYSTANDER]
+2. "Robber", "criminal", "attacker", "thief" = look for [PERPETRATOR] markers
+3. Count UNIQUE person IDs (Person 1, Person 2) - do NOT count the same person multiple times
+4. Provide the EXACT count based on unique Person IDs with that role
+
+## COUNTING QUERIES (How many X?)
+For questions like "How many robbers/victims/people":
+1. Identify all unique Person IDs with the requested role
+2. Each Person ID = 1 individual (even if they appear in multiple timestamps)
+3. State the count clearly: "There were X [role]s in the video"
+4. List each person with their description and timestamps
+
+## Rules:
 1. ONLY use information from the provided context - DO NOT hallucinate
-2. When asked about people, provide ALL available demographic details (gender, approximate age, ethnicity, clothing, etc.)
+2. When asked about people, provide ALL available details: role, threat level, gender, age, ethnicity, clothing, etc.
 3. When asked about speech/dialogue, quote the EXACT transcribed words
 4. Reference specific timestamps (format: MM:SS) for your answers
 5. Synthesize information from multiple aspects when relevant
 6. If information is not available, clearly state what is not in the indexed content
-7. Be specific and detailed - the user expects comprehensive answers`;
+7. Be specific and detailed - the user expects comprehensive forensic-quality answers
+8. For role queries, ALWAYS count unique individuals, not frame appearances`;
 
 /**
  * Keywords for query classification
@@ -88,6 +104,50 @@ const ASPECT_KEYWORDS: Record<AspectType, string[]> = {
     'he',
     'she',
     'they',
+    // Role-related keywords
+    'robber',
+    'robbers',
+    'thief',
+    'thieves',
+    'criminal',
+    'criminals',
+    'perpetrator',
+    'perpetrators',
+    'attacker',
+    'attackers',
+    'suspect',
+    'suspects',
+    'assailant',
+    'burglar',
+    'burglars',
+    'victim',
+    'victims',
+    'target',
+    'hostage',
+    'police',
+    'officer',
+    'officers',
+    'cop',
+    'cops',
+    'security',
+    'guard',
+    'guards',
+    'authority',
+    'authorities',
+    'witness',
+    'witnesses',
+    'bystander',
+    'bystanders',
+    'employee',
+    'staff',
+    'worker',
+    'customer',
+    'customers',
+    // Counting keywords
+    'how many',
+    'count',
+    'number',
+    'total',
   ],
   audio: [
     'say',
@@ -221,14 +281,23 @@ const ASPECT_KEYWORDS: Record<AspectType, string[]> = {
 export class RAGChatService {
   private readonly logger = new Logger(RAGChatService.name);
   private readonly defaultTopK: number;
+  private readonly defaultProvider: AIProvider;
 
   constructor(
     private readonly embeddingService: EmbeddingService,
     private readonly lancedbService: LanceDBService,
-    private readonly geminiService: GeminiService,
+    private readonly providerFactory: AIProviderFactory,
     private readonly configService: ConfigService,
   ) {
     this.defaultTopK = this.configService.get<number>('RAG_TOP_K', 5);
+    this.defaultProvider = this.providerFactory.getDefaultProvider();
+  }
+
+  /**
+   * Get text generator for the specified provider
+   */
+  private getTextGenerator(provider?: AIProvider | string): ITextGenerator {
+    return this.providerFactory.getTextGenerator(provider);
   }
 
   /**
@@ -236,11 +305,13 @@ export class RAGChatService {
    * @param videoId The indexed video ID
    * @param query User's question
    * @param topK Number of frames to retrieve (default: 5)
+   * @param provider Optional AI provider to use for synthesis
    */
   async chat(
     videoId: string,
     query: string,
     topK?: number,
+    provider?: AIProvider | string,
   ): Promise<RAGResponse> {
     const startTime = Date.now();
     const k = topK || this.defaultTopK;
@@ -292,9 +363,9 @@ export class RAGChatService {
       // 4. Build context from retrieved frames
       const context = this.buildContext(relevantFrames, video.title);
 
-      // 5. Synthesize answer with Gemini (text-only, fast)
+      // 5. Synthesize answer with AI provider (text-only, fast)
       const synthesisStartTime = Date.now();
-      const answer = await this.synthesizeAnswer(query, context);
+      const answer = await this.synthesizeAnswer(query, context, provider);
       const synthesisLatency = Date.now() - synthesisStartTime;
       this.logger.debug(`Answer synthesis: ${synthesisLatency}ms`);
 
@@ -330,11 +401,16 @@ export class RAGChatService {
   /**
    * Advanced RAG chat using multi-aspect enhanced frames
    * Provides detailed answers about people, audio, objects, scenes, etc.
+   * @param videoId The indexed video ID
+   * @param query User's question
+   * @param topK Number of frames to retrieve
+   * @param provider Optional AI provider to use for synthesis
    */
   async advancedChat(
     videoId: string,
     query: string,
     topK?: number,
+    provider?: AIProvider | string,
   ): Promise<RAGResponse> {
     const startTime = Date.now();
     const k = topK || this.defaultTopK * 2; // More results for comprehensive answers
@@ -411,7 +487,7 @@ export class RAGChatService {
 
         // Use legacy flow
         const context = this.buildContext(legacyFrames, video.title);
-        const answer = await this.synthesizeAnswer(query, context);
+        const answer = await this.synthesizeAnswer(query, context, provider);
 
         return {
           answer: answer.text,
@@ -430,7 +506,7 @@ export class RAGChatService {
 
       // 6. Synthesize answer with advanced prompt
       const synthesisStartTime = Date.now();
-      const answer = await this.synthesizeAdvancedAnswer(query, context);
+      const answer = await this.synthesizeAdvancedAnswer(query, context, provider);
       const synthesisLatency = Date.now() - synthesisStartTime;
       this.logger.debug(`Advanced synthesis: ${synthesisLatency}ms`);
 
@@ -700,17 +776,17 @@ export class RAGChatService {
   }
 
   /**
-   * Synthesize answer using Gemini with advanced multi-aspect prompt
+   * Synthesize answer using text generator with advanced multi-aspect prompt
    */
   private async synthesizeAdvancedAnswer(
     query: string,
     context: string,
+    provider?: AIProvider | string,
   ): Promise<{
     text: string;
     tokenUsage?: { inputTokens: number; outputTokens: number };
   }> {
-    const modelsApi = this.geminiService.getModelsApi();
-    const modelName = this.geminiService.getModelName();
+    const textGenerator = this.getTextGenerator(provider);
 
     const prompt = `Based on the following comprehensive video content analysis, answer the user's question in detail.
 
@@ -725,42 +801,18 @@ Provide a detailed answer using ONLY the information from the context above. Inc
 Answer:`;
 
     try {
-      const response = await modelsApi.generateContent({
-        model: modelName,
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: prompt }],
-          },
-        ],
-        config: {
-          systemInstruction: ADVANCED_RAG_SYSTEM_INSTRUCTION,
-          thinkingConfig: {
-            thinkingLevel: ThinkingLevel.MEDIUM, // Medium for better reasoning
-          },
+      const result = await textGenerator.generateWithSystemInstruction(
+        ADVANCED_RAG_SYSTEM_INSTRUCTION,
+        prompt,
+        {
+          qualityLevel: 'medium', // Medium for better reasoning
           maxOutputTokens: 2048, // Allow longer responses for detailed answers
         },
-      });
-
-      const candidate = response.candidates?.[0];
-      let text = '';
-
-      if (candidate?.content?.parts) {
-        for (const part of candidate.content.parts) {
-          if (part.text && !part.thought) {
-            text += part.text;
-          }
-        }
-      }
+      );
 
       return {
-        text: text || 'Unable to generate response',
-        tokenUsage: response.usageMetadata
-          ? {
-              inputTokens: response.usageMetadata.promptTokenCount || 0,
-              outputTokens: response.usageMetadata.candidatesTokenCount || 0,
-            }
-          : undefined,
+        text: result.text || 'Unable to generate response',
+        tokenUsage: result.tokenUsage,
       };
     } catch (error) {
       this.logger.error(`Advanced synthesis failed: ${error.message}`);
@@ -769,17 +821,17 @@ Answer:`;
   }
 
   /**
-   * Synthesize answer using Gemini with text-only prompt (legacy)
+   * Synthesize answer using text generator with text-only prompt (legacy)
    */
   private async synthesizeAnswer(
     query: string,
     context: string,
+    provider?: AIProvider | string,
   ): Promise<{
     text: string;
     tokenUsage?: { inputTokens: number; outputTokens: number };
   }> {
-    const modelsApi = this.geminiService.getModelsApi();
-    const modelName = this.geminiService.getModelName();
+    const textGenerator = this.getTextGenerator(provider);
 
     const prompt = `Based on the following video content context, answer the user's question.
 
@@ -792,45 +844,18 @@ User Question: ${query}
 Answer:`;
 
     try {
-      const response = await modelsApi.generateContent({
-        model: modelName,
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: prompt }],
-          },
-        ],
-        config: {
-          systemInstruction: RAG_SYSTEM_INSTRUCTION,
-          // Use LOW thinking level for fast responses
-          thinkingConfig: {
-            thinkingLevel: ThinkingLevel.LOW,
-          },
-          // Limit output length for speed
-          maxOutputTokens: 1024,
+      const result = await textGenerator.generateWithSystemInstruction(
+        RAG_SYSTEM_INSTRUCTION,
+        prompt,
+        {
+          qualityLevel: 'low', // Use low for fast responses
+          maxOutputTokens: 1024, // Limit output length for speed
         },
-      });
-
-      // Extract text from response
-      const candidate = response.candidates?.[0];
-      let text = '';
-
-      if (candidate?.content?.parts) {
-        for (const part of candidate.content.parts) {
-          if (part.text && !part.thought) {
-            text += part.text;
-          }
-        }
-      }
+      );
 
       return {
-        text: text || 'Unable to generate response',
-        tokenUsage: response.usageMetadata
-          ? {
-              inputTokens: response.usageMetadata.promptTokenCount || 0,
-              outputTokens: response.usageMetadata.candidatesTokenCount || 0,
-            }
-          : undefined,
+        text: result.text || 'Unable to generate response',
+        tokenUsage: result.tokenUsage,
       };
     } catch (error) {
       this.logger.error(`Synthesis failed: ${error.message}`);

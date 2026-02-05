@@ -12,8 +12,6 @@ import {
   HttpStatus,
   Logger,
   ParseFilePipe,
-  MaxFileSizeValidator,
-  FileTypeValidator,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
@@ -23,8 +21,7 @@ import { VideoIndexService } from './video-index.service';
 import { RAGChatService } from './rag-chat.service';
 import { LanceDBService } from './lancedb.service';
 import { EmbeddingService } from './embedding.service';
-import { VideoAnalyzeService } from '../gemini/video-analyze.service';
-import { FileManagerService } from '../gemini/file-manager.service';
+import { AIProviderFactory } from '../providers';
 import {
   IndexVideoDto,
   IndexYouTubeDto,
@@ -32,6 +29,7 @@ import {
   GlobalSearchDto,
 } from './dto';
 import { ConfigService } from '@nestjs/config';
+import { VideoFileValidator } from '../common/validators';
 
 // Ensure uploads directory exists
 const uploadsDir = join(process.cwd(), 'uploads');
@@ -39,6 +37,10 @@ if (!existsSync(uploadsDir)) {
   mkdirSync(uploadsDir, { recursive: true });
 }
 
+/**
+ * Controller for LanceDB video indexing and RAG search
+ * Supports multiple AI providers (Gemini, OpenAI)
+ */
 @Controller('lancedb')
 export class LanceDBController {
   private readonly logger = new Logger(LanceDBController.name);
@@ -48,14 +50,48 @@ export class LanceDBController {
     private readonly ragChatService: RAGChatService,
     private readonly lancedbService: LanceDBService,
     private readonly embeddingService: EmbeddingService,
-    private readonly videoAnalyzeService: VideoAnalyzeService,
-    private readonly fileManagerService: FileManagerService,
+    private readonly providerFactory: AIProviderFactory,
     private readonly configService: ConfigService,
   ) {}
 
   /**
+   * Map thinking level input to quality level
+   */
+  private mapThinkingLevelToQuality(
+    thinkingLevel?: string,
+  ): 'low' | 'medium' | 'high' {
+    switch (thinkingLevel) {
+      case 'MINIMAL':
+      case 'LOW':
+        return 'low';
+      case 'MEDIUM':
+        return 'medium';
+      case 'HIGH':
+      default:
+        return 'high';
+    }
+  }
+
+  /**
+   * Map media resolution input to quality level
+   */
+  private mapMediaResolutionToQuality(
+    mediaResolution?: string,
+  ): 'low' | 'medium' | 'high' {
+    switch (mediaResolution) {
+      case 'MEDIA_RESOLUTION_LOW':
+        return 'low';
+      case 'MEDIA_RESOLUTION_MEDIUM':
+        return 'medium';
+      case 'MEDIA_RESOLUTION_HIGH':
+      default:
+        return 'high';
+    }
+  }
+
+  /**
    * Index an uploaded video file for RAG search
-   * Analyzes the video with Gemini to extract frame descriptions, then indexes them
+   * Analyzes the video with selected AI provider to extract frame descriptions, then indexes them
    */
   @Post('index')
   @UseInterceptors(
@@ -75,12 +111,8 @@ export class LanceDBController {
     @UploadedFile(
       new ParseFilePipe({
         validators: [
-          // Max 2GB file size
-          new MaxFileSizeValidator({ maxSize: 2 * 1024 * 1024 * 1024 }),
-          // Supported video formats
-          new FileTypeValidator({
-            fileType: /^video\/(mp4|mpeg|mov|avi|x-flv|mpg|webm|wmv|3gpp)$/,
-          }),
+          // Custom video validator with max 2GB file size
+          new VideoFileValidator({ maxSize: 2 * 1024 * 1024 * 1024 }),
         ],
       }),
     )
@@ -88,6 +120,9 @@ export class LanceDBController {
     @Body() dto: IndexVideoDto,
   ) {
     const startTime = Date.now();
+    const fileHandler = this.providerFactory.getFileHandler(dto.provider);
+    const videoAnalyzer = this.providerFactory.getVideoAnalyzer(dto.provider);
+    const providerName = videoAnalyzer.getProviderName();
 
     // Auto-generate title from filename if not provided
     const title =
@@ -95,28 +130,37 @@ export class LanceDBController {
       file.originalname.replace(/\.[^/.]+$/, '') ||
       `Video ${Date.now()}`;
 
-    this.logger.log(`Indexing video: ${title}, size: ${file.size} bytes`);
+    this.logger.log(
+      `Indexing video: ${title}, size: ${file.size} bytes, provider: ${providerName}`,
+    );
 
     let fileMetadata: { uri: string; mimeType: string; name: string } | null =
       null;
 
     try {
-      // Upload file to Gemini File API and wait for it to be ready
-      fileMetadata = await this.fileManagerService.uploadAndWaitForActive(
+      // Upload file to provider and wait for it to be ready
+      const uploadedFile = await fileHandler.uploadAndWaitForActive(
         file.path,
         file.mimetype,
         title,
       );
+      fileMetadata = {
+        uri: uploadedFile.uri,
+        mimeType: uploadedFile.mimeType,
+        name: uploadedFile.name,
+      };
 
       this.logger.log(`File uploaded and active: ${fileMetadata.uri}`);
 
       // Analyze video to extract frame descriptions
-      const analysis = await this.videoAnalyzeService.analyzeForIndexing(
+      const analysis = await videoAnalyzer.analyzeForIndexing(
         fileMetadata.uri,
         fileMetadata.mimeType,
         {
-          thinkingLevel: dto.thinkingLevel,
-          mediaResolution: dto.mediaResolution,
+          qualityLevel: this.mapThinkingLevelToQuality(dto.thinkingLevel),
+          mediaResolution: this.mapMediaResolutionToQuality(
+            dto.mediaResolution,
+          ),
         },
       );
 
@@ -134,6 +178,7 @@ export class LanceDBController {
 
       return {
         ...result,
+        provider: providerName,
         indexingTimeMs: Date.now() - startTime,
         tokenUsage: analysis.tokenUsage,
       };
@@ -152,13 +197,13 @@ export class LanceDBController {
         );
       }
 
-      // Clean up the uploaded file from Gemini
+      // Clean up the uploaded file from provider
       if (fileMetadata) {
         try {
-          await this.fileManagerService.deleteFile(fileMetadata.name);
+          await fileHandler.deleteFile(fileMetadata.name);
         } catch (cleanupError) {
           this.logger.warn(
-            `Failed to cleanup Gemini file: ${cleanupError.message}`,
+            `Failed to cleanup provider file: ${cleanupError.message}`,
           );
         }
       }
@@ -167,27 +212,29 @@ export class LanceDBController {
 
   /**
    * Index a YouTube video for RAG search (legacy - basic frame extraction)
-   * Analyzes the video with Gemini to extract frame descriptions, then indexes them
+   * Analyzes the video with selected AI provider to extract frame descriptions, then indexes them
    */
   @Post('index/youtube')
   async indexYouTube(@Body() dto: IndexYouTubeDto) {
     const startTime = Date.now();
-    this.logger.log(`Indexing YouTube video: ${dto.url}`);
+    const videoAnalyzer = this.providerFactory.getVideoAnalyzer(dto.provider);
+    const providerName = videoAnalyzer.getProviderName();
+
+    this.logger.log(
+      `Indexing YouTube video: ${dto.url}, provider: ${providerName}`,
+    );
 
     // Auto-generate title if not provided
     const title = dto.title || this.generateTitleFromUrl(dto.url);
 
     try {
       // Analyze YouTube video to extract frame descriptions
-      const analysis = await this.videoAnalyzeService.analyzeYouTubeForIndexing(
-        dto.url,
-        {
-          thinkingLevel: dto.thinkingLevel,
-          mediaResolution: dto.mediaResolution,
-          startOffset: dto.startOffset,
-          endOffset: dto.endOffset,
-        },
-      );
+      const analysis = await videoAnalyzer.analyzeYouTubeForIndexing(dto.url, {
+        qualityLevel: this.mapThinkingLevelToQuality(dto.thinkingLevel),
+        mediaResolution: this.mapMediaResolutionToQuality(dto.mediaResolution),
+        startOffset: dto.startOffset,
+        endOffset: dto.endOffset,
+      });
 
       this.logger.log(
         `Analysis complete, ${analysis.frames?.length || 0} frames extracted`,
@@ -203,6 +250,7 @@ export class LanceDBController {
 
       return {
         ...result,
+        provider: providerName,
         indexingTimeMs: Date.now() - startTime,
         tokenUsage: analysis.tokenUsage,
       };
@@ -223,23 +271,29 @@ export class LanceDBController {
   @Post('index/youtube/advanced')
   async indexYouTubeAdvanced(@Body() dto: IndexYouTubeDto) {
     const startTime = Date.now();
-    this.logger.log(`Advanced indexing YouTube video: ${dto.url}`);
+    const videoAnalyzer = this.providerFactory.getVideoAnalyzer(dto.provider);
+    const providerName = videoAnalyzer.getProviderName();
+
+    this.logger.log(
+      `Advanced indexing YouTube video: ${dto.url}, provider: ${providerName}`,
+    );
 
     // Auto-generate title if not provided
     const title = dto.title || this.generateTitleFromUrl(dto.url);
 
     try {
       // Perform advanced multi-modal analysis
-      const analysis =
-        await this.videoAnalyzeService.analyzeYouTubeForAdvancedIndexing(
-          dto.url,
-          {
-            thinkingLevel: dto.thinkingLevel,
-            mediaResolution: dto.mediaResolution,
-            startOffset: dto.startOffset,
-            endOffset: dto.endOffset,
-          },
-        );
+      const analysis = await videoAnalyzer.analyzeYouTubeForAdvancedIndexing(
+        dto.url,
+        {
+          qualityLevel: this.mapThinkingLevelToQuality(dto.thinkingLevel),
+          mediaResolution: this.mapMediaResolutionToQuality(
+            dto.mediaResolution,
+          ),
+          startOffset: dto.startOffset,
+          endOffset: dto.endOffset,
+        },
+      );
 
       this.logger.log(
         `Advanced analysis complete, ${analysis.frames?.length || 0} frames extracted`,
@@ -254,6 +308,7 @@ export class LanceDBController {
 
       return {
         ...result,
+        provider: providerName,
         indexingTimeMs: Date.now() - startTime,
         tokenUsage: analysis.tokenUsage,
         analysisType: 'advanced',
@@ -289,10 +344,8 @@ export class LanceDBController {
     @UploadedFile(
       new ParseFilePipe({
         validators: [
-          new MaxFileSizeValidator({ maxSize: 2 * 1024 * 1024 * 1024 }),
-          new FileTypeValidator({
-            fileType: /^video\/(mp4|mpeg|mov|avi|x-flv|mpg|webm|wmv|3gpp)$/,
-          }),
+          // Custom video validator with max 2GB file size
+          new VideoFileValidator({ maxSize: 2 * 1024 * 1024 * 1024 }),
         ],
       }),
     )
@@ -300,6 +353,9 @@ export class LanceDBController {
     @Body() dto: IndexVideoDto,
   ) {
     const startTime = Date.now();
+    const fileHandler = this.providerFactory.getFileHandler(dto.provider);
+    const videoAnalyzer = this.providerFactory.getVideoAnalyzer(dto.provider);
+    const providerName = videoAnalyzer.getProviderName();
 
     const title =
       dto.title ||
@@ -307,32 +363,40 @@ export class LanceDBController {
       `Video ${Date.now()}`;
 
     this.logger.log(
-      `Advanced indexing video: ${title}, size: ${file.size} bytes`,
+      `Advanced indexing video: ${title}, size: ${file.size} bytes, provider: ${providerName}`,
     );
 
     let fileMetadata: { uri: string; mimeType: string; name: string } | null =
       null;
 
     try {
-      // Upload file to Gemini
-      fileMetadata = await this.fileManagerService.uploadAndWaitForActive(
+      // Upload file to provider with advanced extraction options
+      // This enables more frames and higher resolution for comprehensive analysis
+      const uploadedFile = await fileHandler.uploadAndWaitForActive(
         file.path,
         file.mimetype,
         title,
+        { advanced: true },
       );
+      fileMetadata = {
+        uri: uploadedFile.uri,
+        mimeType: uploadedFile.mimeType,
+        name: uploadedFile.name,
+      };
 
-      this.logger.log(`File uploaded and active: ${fileMetadata.uri}`);
+      this.logger.log(`File uploaded and active (advanced mode): ${fileMetadata.uri}`);
 
       // Perform advanced multi-modal analysis
-      const analysis =
-        await this.videoAnalyzeService.analyzeForAdvancedIndexing(
-          fileMetadata.uri,
-          fileMetadata.mimeType,
-          {
-            thinkingLevel: dto.thinkingLevel,
-            mediaResolution: dto.mediaResolution,
-          },
-        );
+      const analysis = await videoAnalyzer.analyzeForAdvancedIndexing(
+        fileMetadata.uri,
+        fileMetadata.mimeType,
+        {
+          qualityLevel: this.mapThinkingLevelToQuality(dto.thinkingLevel),
+          mediaResolution: this.mapMediaResolutionToQuality(
+            dto.mediaResolution,
+          ),
+        },
+      );
 
       this.logger.log(
         `Advanced analysis complete, ${analysis.frames?.length || 0} frames extracted`,
@@ -347,6 +411,7 @@ export class LanceDBController {
 
       return {
         ...result,
+        provider: providerName,
         indexingTimeMs: Date.now() - startTime,
         tokenUsage: analysis.tokenUsage,
         analysisType: 'advanced',
@@ -371,10 +436,10 @@ export class LanceDBController {
 
       if (fileMetadata) {
         try {
-          await this.fileManagerService.deleteFile(fileMetadata.name);
+          await fileHandler.deleteFile(fileMetadata.name);
         } catch (cleanupError) {
           this.logger.warn(
-            `Failed to cleanup Gemini file: ${cleanupError.message}`,
+            `Failed to cleanup provider file: ${cleanupError.message}`,
           );
         }
       }
@@ -388,8 +453,12 @@ export class LanceDBController {
   @Post('chat')
   async chat(@Body() dto: RAGChatDto) {
     const startTime = Date.now();
+    const providerName = dto.provider
+      ? dto.provider
+      : this.providerFactory.getDefaultProvider();
+
     this.logger.log(
-      `RAG chat for video ${dto.videoId}: ${dto.query.substring(0, 100)}...`,
+      `RAG chat for video ${dto.videoId}: ${dto.query.substring(0, 100)}..., provider: ${providerName}`,
     );
 
     try {
@@ -397,10 +466,12 @@ export class LanceDBController {
         dto.videoId,
         dto.query,
         dto.topK,
+        dto.provider,
       );
 
       return {
         ...response,
+        provider: providerName,
         latencyMs: Date.now() - startTime,
       };
     } catch (error) {
@@ -417,8 +488,12 @@ export class LanceDBController {
   @Post('chat/advanced')
   async chatAdvanced(@Body() dto: RAGChatDto) {
     const startTime = Date.now();
+    const providerName = dto.provider
+      ? dto.provider
+      : this.providerFactory.getDefaultProvider();
+
     this.logger.log(
-      `Advanced RAG chat for video ${dto.videoId}: ${dto.query.substring(0, 100)}...`,
+      `Advanced RAG chat for video ${dto.videoId}: ${dto.query.substring(0, 100)}..., provider: ${providerName}`,
     );
 
     try {
@@ -426,10 +501,12 @@ export class LanceDBController {
         dto.videoId,
         dto.query,
         dto.topK,
+        dto.provider,
       );
 
       return {
         ...response,
+        provider: providerName,
         latencyMs: Date.now() - startTime,
         chatType: 'advanced',
       };
